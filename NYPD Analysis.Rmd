@@ -1,0 +1,179 @@
+---
+title: "NYPD Shooting Incident Data Analysis"
+output: html_document
+date: "2026-08-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Import Library
+`````{r}
+library(tidyverse)
+library(lubridate)
+`````
+## Import data
+```{r import}
+url <- "https://data.cityofnewyork.us/api/v3/views/833y-fsy8/export.csv?accessType=DOWNLOAD"
+shootings <- read_csv(url)
+```
+```{r}
+glimpse(shootings)
+```
+## Tidy the data
+```{r}
+shootings_clean <- shootings %>%
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE))
+
+glimpse(shootings_clean$OCCUR_DATE)
+```
+```{r}
+shootings_clean <- shootings_clean %>%
+  mutate(
+    LOCATION_DESC = na_if(LOCATION_DESC, "(null)"),
+    PERP_AGE_GROUP = na_if(PERP_AGE_GROUP, "(null)"),
+    PERP_SEX = na_if(PERP_SEX, "(null)"),
+    PERP_RACE = na_if(PERP_RACE, "(null)")
+  )
+
+shootings_clean %>%
+  summarise(
+    missing_location = sum(is.na(LOCATION_DESC)),
+    missing_perp_age  = sum(is.na(PERP_AGE_GROUP)),
+    missing_perp_sex  = sum(is.na(PERP_SEX)),
+    missing_perp_race = sum(is.na(PERP_RACE))
+  )
+```
+```{r}
+shootings_clean %>%
+  count(PERP_AGE_GROUP, sort = TRUE)
+```
+
+```{r}
+shootings_clean %>%
+  count(PERP_AGE_GROUP, sort = TRUE) %>%
+  print(n = Inf)
+```
+```{r}
+valid_ages <- c("<18", "18-24", "25-44", "45-64", "65+", "UNKNOWN")
+
+shootings_clean <- shootings_clean %>%
+  mutate(
+    PERP_AGE_GROUP = if_else(PERP_AGE_GROUP %in% valid_ages, PERP_AGE_GROUP, NA_character_)
+  )
+
+shootings_clean %>%
+  count(PERP_AGE_GROUP, sort = TRUE)
+```
+```{r}
+shootings_clean %>%
+  count(VIC_AGE_GROUP, sort = TRUE)
+```
+
+```{r}
+shootings_clean <- shootings_clean %>%
+  mutate(
+    VIC_AGE_GROUP = if_else(VIC_AGE_GROUP %in% valid_ages, VIC_AGE_GROUP, NA_character_)
+  )
+
+shootings_clean %>%
+  count(VIC_AGE_GROUP, sort = TRUE)
+```
+
+```{r}
+shootings_clean <- shootings_clean %>%
+  mutate(
+    year = year(OCCUR_DATE),
+    month = month(OCCUR_DATE, label = TRUE),
+    weekday = wday(OCCUR_DATE, label = TRUE),
+    hour = hour(OCCUR_TIME)
+  )
+
+shootings_clean %>%
+  select(OCCUR_DATE, year, month, weekday, OCCUR_TIME, hour) %>%
+  head()
+```
+
+```{r}
+shootings_clean <- shootings_clean %>%
+  select(-X_COORD_CD, -Y_COORD_CD, -Lon_Lat)
+
+glimpse(shootings_clean)
+```
+## Visualization
+```{r}
+shootings_clean %>%
+  count(year) %>%
+  ggplot(aes(x = year, y = n)) +
+  geom_line(color = "firebrick", linewidth = 1) +
+  geom_point(color = "firebrick", size = 2) +
+  scale_x_continuous(breaks = seq(2006, 2024, 2)) +
+  labs(title = "NYPD Shooting Incidents by Year",
+       subtitle = "New York City, 2006–2024",
+       x = "Year", y = "Number of Incidents") +
+  theme_minimal()
+```
+```{r}
+shootings_clean %>%
+  count(BORO, sort = TRUE) %>%
+  ggplot(aes(x = reorder(BORO, n), y = n, fill = BORO)) +
+  geom_col() +
+  coord_flip() +
+  labs(title = "NYPD Shooting Incidents by Borough",
+       subtitle = "New York City, 2006–2024",
+       x = NULL, y = "Number of Incidents") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r}
+shootings_clean <- shootings_clean %>%
+  mutate(
+    time_of_day = if_else(hour >= 6 & hour < 18, "Day", "Night")
+  )
+
+shootings_clean %>%
+  count(time_of_day)
+```
+## Model
+```{r}
+model_data <- shootings_clean %>%
+  filter(!is.na(VIC_AGE_GROUP), VIC_AGE_GROUP != "UNKNOWN")
+
+fatal_model <- glm(
+  STATISTICAL_MURDER_FLAG ~ VIC_AGE_GROUP + time_of_day,
+  data = model_data,
+  family = "binomial"
+)
+
+summary(fatal_model)
+```
+```{r}
+exp(coef(fatal_model))
+```
+
+```{r}
+shootings_clean %>%
+  count(weekday, time_of_day) %>%
+  ggplot(aes(x = weekday, y = time_of_day, fill = n)) +
+  geom_tile() +
+  scale_fill_gradient(low = "lightyellow", high = "firebrick") +
+  labs(title = "Shooting Incidents by Day of Week and Time of Day",
+       subtitle = "New York City, 2006–2024",
+       x = "Day of Week", y = NULL, fill = "Incidents") +
+  theme_minimal()
+```
+```{r}
+shootings_clean %>%
+  count(weekday, time_of_day) %>%
+  filter(time_of_day == "Night") %>%
+  arrange(desc(n))
+```
+
+## Discussion of Bias
+
+The raw data can be said to have severall limitations, some of which include the following. First, the raw data lacks information on perpetrators since police records perpetrators demographic details only when an offender is brought to justice. As such when analyzing the question "who commits shootings, the focus is on the demographics of the people who are brought to justice and not the general population. Second, the number of shootings in each of the boroughs cannot be compared absolutely since some areas have a higher number of people than others.It would be appropriate to report the number of shootings that occur per 100,000 people. The last limitation is that the time of the day when the shooting occurs is misinterpreted. For instance, a shooting that occurs at 1:30 am on Sunday would be recorded as taking place on Sunday when in reality, the incident occurred on Saturday night.
+
+The reason why I decided to exclude perpetrator data from consideration is because such information was available in only 63% of cases that were actually solved. In other words, including this data would make the model rely solely on solved shootings for prediction which would introduce a significant selection bias. I have chosen to keep the focus on victims age, time of day, and weekday information, even though it ignores some relevant information, such as caliber and type of weapon used. The latter has a significant impact on survival rates since regardless of one's age, being shot with a high caliber bullet can cause severe injuries.
